@@ -1,0 +1,9 @@
+[Unit]
+Description=Sync Steam games into the Omarchy menu
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/steam-launcher-sync
+
+[Install]
+WantedBy=default.target

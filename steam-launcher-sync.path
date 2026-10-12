@@ -1,0 +1,14 @@
+[Unit]
+Description=Watch Steam libraries for installed or removed games
+
+[Path]
+# Each library's steamapps directory gains or loses an appmanifest_<appid>.acf
+# when a game is installed or uninstalled. Add a line here for new libraries.
+PathChanged=%h/.local/share/Steam/steamapps
+PathChanged=/run/media/ballad/HIGSBY/SteamLibrary/steamapps
+# Steam can add its own game shortcut after the install finishes.
+PathChanged=%h/.local/share/applications
+Unit=steam-launcher-sync.service
+
+[Install]
+WantedBy=default.target

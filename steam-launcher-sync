@@ -1,0 +1,87 @@
+#!/bin/bash
+
+# Create Omarchy menu entries for installed Steam games.
+# Re-run after installing or uninstalling games.
+
+set -euo pipefail
+
+steam_root="$HOME/.local/share/Steam"
+data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+apps_dir="$data_home/applications"
+icons_dir="$data_home/icons/hicolor/32x32/apps"
+cache_dir="$steam_root/appcache/librarycache"
+
+mkdir -p "$apps_dir" "$icons_dir"
+
+mapfile -t libraries < <(awk -F'"' '$2 == "path" { print $4 }' "$steam_root/steamapps/libraryfolders.vdf")
+
+# Steam caches each game's 32x32 client icon as a hash-named jpg next to its artwork.
+find_icon() {
+  local appid=$1 file
+  for file in "$cache_dir/$appid"/*.jpg; do
+    [[ -f $file && $(basename "$file") =~ ^[0-9a-f]{40}\.jpg$ ]] || continue
+    [[ $(magick identify -format '%w' "$file" 2>/dev/null) == 32 ]] && { echo "$file"; return; }
+  done
+}
+
+for library in "${libraries[@]}"; do
+  for manifest in "$library"/steamapps/appmanifest_*.acf; do
+    [[ -f $manifest ]] || continue
+
+    appid=$(awk -F'"' '$2 == "appid" { print $4; exit }' "$manifest")
+    name=$(awk -F'"' '$2 == "name" { print $4; exit }' "$manifest")
+    [[ -n $appid && -n $name ]] || continue
+
+    # Proton, runtimes, and redistributables aren't games.
+    [[ $name =~ ^(Proton|Steam\ Linux\ Runtime|Steamworks\ Common) ]] && continue
+
+    icon="$icons_dir/steam_icon_$appid.png"
+    if [[ ! -f $icon ]]; then
+      src=$(find_icon "$appid" || true)
+      if [[ -n $src ]]; then
+        magick "$src" "$icon"
+      else
+        icon=steam
+      fi
+    fi
+
+    entry="$apps_dir/steam_app_$appid.desktop"
+    content="[Desktop Entry]
+Name=$name
+Comment=Play $name on Steam
+Exec=steam steam://rungameid/$appid
+Icon=$icon
+Terminal=false
+Type=Application
+Categories=Game;
+X-Steam-Library=$library"
+
+    # Steam rewrites manifests constantly while downloading, so only touch
+    # entries that changed to keep the menu from reloading on every write.
+    if [[ ! -f $entry || $(<"$entry") != "$content" ]]; then
+      printf '%s\n' "$content" >"$entry"
+      echo "Updated $name"
+    fi
+
+    # Steam writes its own "<Game>.desktop" when asked to create a shortcut,
+    # which would list the game twice. Our entry replaces it.
+    while IFS= read -r shortcut; do
+      [[ $(basename "$shortcut") != steam_app_* ]] || continue
+      rm -f "$shortcut"
+      echo "Removed duplicate $name shortcut made by Steam"
+    done < <(grep -lx "Exec=steam steam://rungameid/$appid" "$apps_dir"/*.desktop)
+  done
+done
+
+# Drop entries for uninstalled games. Entries on unmounted libraries are kept.
+for entry in "$apps_dir"/steam_app_*.desktop; do
+  [[ -f $entry ]] || continue
+  appid=$(basename "$entry" .desktop)
+  appid=${appid#steam_app_}
+  library=$(awk -F= '$1 == "X-Steam-Library" { print $2; exit }' "$entry")
+
+  if [[ -d $library/steamapps && ! -f $library/steamapps/appmanifest_$appid.acf ]]; then
+    echo "Removed $(awk -F= '$1 == "Name" { print $2; exit }' "$entry")"
+    rm -f "$entry" "$icons_dir/steam_icon_$appid.png"
+  fi
+done
